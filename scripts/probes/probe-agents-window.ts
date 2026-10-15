@@ -4,20 +4,22 @@
  *
  * Use:
  *   · See the real shape: group ids (`workspace:` / `repo:` / `home`), row-level dots, draft rows
- *   · Verify row → id alignment: `--verify <row number>` actually clicks that row, reads back the composer-bar
- *     `data-composer-id` against the resolved value, then clicks back to the original row (briefly changes the window's current agent)
+ *   · Verify row → id alignment: `--verify <row number>` actually clicks that row, reads back the open
+ *     session id against the resolved value, then clicks back to the original row (briefly changes the window's current agent)
  *
  * Usage: pnpm exec tsx scripts/probes/probe-agents-window.ts [--verify 3] [--json]
  */
 import 'dotenv/config';
 import type { AgentsWindowDump } from '../../packages/agent/src/drivers/cursor/agents-window.js';
-import { CdpClient } from '../../packages/agent/src/cdp/client.js';
+import { cdpCallExpression, CdpClient } from '../../packages/agent/src/cdp/client.js';
 import { loadConfig } from '../../packages/agent/src/config.js';
 import {
   AGENTS_DUMP_TIMEOUT_MS,
+  AGENTS_WINDOW_PAGE_DEPS,
 
   dumpAgentsWindow,
   mapAgentsWindowDump,
+  readOpenAgentsComposerId,
 } from '../../packages/agent/src/drivers/cursor/agents-window.js';
 
 interface CDPTarget {
@@ -50,6 +52,7 @@ async function main(): Promise<void> {
       dumpAgentsWindow as (...args: never[]) => unknown,
       [],
       AGENTS_DUMP_TIMEOUT_MS,
+      AGENTS_WINDOW_PAGE_DEPS,
     ) as AgentsWindowDump | null;
     if (!dump) {
       console.error('dump 返回空');
@@ -101,9 +104,10 @@ async function main(): Promise<void> {
         return 'clicked:' + clean(el.querySelector('.ui-sidebar-menu-button-label')?.textContent);
       })()`);
       await new Promise(r => setTimeout(r, 2000));
-      const landed = await client.evaluate(
-        `document.querySelector('div.composer-bar.editor[data-composer-id]')?.getAttribute('data-composer-id') || null`,
-      ) as string | null;
+      const landed = await client.evaluate(cdpCallExpression(
+        readOpenAgentsComposerId as (...args: never[]) => unknown,
+        [],
+      )) as string | null;
       console.log(`点击: ${clicked}`);
       console.log(`回读 composerId: ${landed}  ${landed === tab.composerId ? 'OK 与解析值一致' : 'MISMATCH 不一致（对齐要修）'}`);
 
@@ -124,9 +128,10 @@ async function main(): Promise<void> {
           if (res === 'no-more')
             break;
           await new Promise(r => setTimeout(r, 1200));
-          const back = await client.evaluate(
-            `document.querySelector('div.composer-bar.editor[data-composer-id]')?.getAttribute('data-composer-id') || null`,
-          ) as string | null;
+          const back = await client.evaluate(cdpCallExpression(
+            readOpenAgentsComposerId as (...args: never[]) => unknown,
+            [],
+          )) as string | null;
           if (back === before) {
             console.log(`点回原 agent: ${back}  OK`);
             break;

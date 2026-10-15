@@ -20,6 +20,7 @@ import { CdpClient } from '../../packages/agent/src/cdp/client.js';
 import { loadConfig } from '../../packages/agent/src/config.js';
 import {
   AGENTS_DUMP_TIMEOUT_MS,
+  AGENTS_WINDOW_PAGE_DEPS,
 
   dumpAgentsWindow,
   isCloudAgentId,
@@ -60,6 +61,7 @@ async function main(): Promise<void> {
       dumpAgentsWindow as (...args: never[]) => unknown,
       [],
       AGENTS_DUMP_TIMEOUT_MS,
+      AGENTS_WINDOW_PAGE_DEPS,
     ) as AgentsWindowDump | null;
     if (!dump) {
       console.error('[cloud-guard] dump 返回 null');

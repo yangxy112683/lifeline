@@ -1,18 +1,22 @@
 /**
  * Cursor's Agents window (CDP title `Cursor Agents`) — a cross-repo global agent list.
  *
- * How it differs from a project window (measured 2026-09-16, Cursor 3.18.9):
+ * How it differs from a project window (measured 2026-09-16, Cursor 3.18.9;
+ * open-session id remeasured 2026-10-15, Cursor 3.24.12):
  *   - no project workspace (`vscode.context.configuration().workspace` is null), no `#workbench.parts.*`;
- *   - sidebar is `.ui-sidebar-menu-button[aria-id="glass-sidebar-agent-row"]` inside
- *     `.ui-sidebar-section[data-agent-drop-section-id]` (repo / workspace groups); rows have no composerId;
- *   - the main pane is the selected agent's session: `div.composer-bar.editor[data-composer-id][data-composer-status]`;
+ *   - sidebar rows are `.ui-sidebar-menu-button[aria-id="glass-sidebar-agent-row"]` inside
+ *     `.ui-sidebar-section[data-agent-drop-section-id]` (repo / workspace groups);
+ *   - this window does not mount `div.composer-bar.editor`. The open session id is
+ *     `data-sidebar-item-key="row:<uuid>"` on the row whose button has `data-active`;
  *   - the input is `.ui-prompt-input-editor__input` (tiptap), **not** inside `.composer-bar`.
  *
  * Two sources of truth:
  *   1. row status dots `.ui-agent-status-dot[data-variant]`: needs-attention / done-unseen / draft;
- *   2. the row's real composerId — not on the row; inferred by aligning
+ *   2. a row's composerId for the list still comes from aligning
  *      "group → that workspace's session sequence" (see alignAgentsSectionIds;
  *      if it does not align, keep the placeholder id, do not guess).
+ *      The open session is the exception: `readOpenAgentsComposerId` reads it
+ *      off the active row, and falls back to a composer bar when one is mounted.
  */
 
 import type {
@@ -142,9 +146,111 @@ export interface AgentsWindowDump {
 }
 
 /**
- * Page-side extract (self-contained; must not reference Node-side variables —
- * it is serialized and dropped into the renderer).
- * Read-only; clicks nothing.
+ * Open session id in the Agents window.
+ *
+ * A mounted composer bar still wins, so an older build that paints one keeps
+ * the id it already published. The Agents window measured on Cursor 3.24 does
+ * not mount that bar. The id is `row:<uuid>` on the sidebar row whose button
+ * carries `data-active`.
+ *
+ * Page-serialized callers must pass this function in `deps`. `dumpAgentsWindow`
+ * calls it by name, and `toString()` does not include the callee.
+ * The row selector stays a literal here for the same reason. A module const
+ * would be missing in the page.
+ */
+export function readOpenAgentsComposerId(): string {
+  const bar = document.querySelector('div.composer-bar.editor[data-composer-id]');
+  const fromBar = bar?.getAttribute('data-composer-id') || '';
+  if (fromBar)
+    return fromBar;
+  for (const el of Array.from(document.querySelectorAll('.ui-sidebar-menu-button[aria-id="glass-sidebar-agent-row"]'))) {
+    if (!el.hasAttribute('data-active') || el.getAttribute('data-active') === 'false')
+      continue;
+    const key = el.closest('[data-sidebar-item-key]')?.getAttribute('data-sidebar-item-key') || '';
+    if (key.startsWith('row:'))
+      return key.slice('row:'.length);
+  }
+  return '';
+}
+
+/** Declared next to `dumpAgentsWindow` whenever that function is sent to the page. */
+export const AGENTS_WINDOW_PAGE_DEPS = [readOpenAgentsComposerId];
+
+export interface AgentsRowSwitchInput {
+  title: string;
+  section: string;
+  wantIdx: number;
+  wantId: string;
+}
+
+export interface AgentsRowSwitchOutcome {
+  ok: boolean;
+  error?: string;
+  landedComposerId?: string;
+  tried?: number;
+  via?: string;
+}
+
+/**
+ * Click an Agents-window row and read back the open session.
+ * With a real id, the row is `data-sidebar-item-key="row:<id>"`.
+ * A draft has no id. Clicking the title match is success.
+ * Calls `readOpenAgentsComposerId` by name. Send that function in `deps`.
+ */
+export async function switchAgentsRowOnPage(input: AgentsRowSwitchInput): Promise<AgentsRowSwitchOutcome> {
+  const clean = (s: string | null | undefined) => (s || '').replace(/\s+/g, ' ').trim();
+  const title = clean(input.title);
+  const section = clean(input.section);
+  const wantIdx = input.wantIdx;
+  const wantId = input.wantId;
+  const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+  const sectionOf = (el: Element) => clean(
+    el.closest('.ui-sidebar-section')?.querySelector('[data-section-head] .ui-sidebar-menu-button-label')?.textContent,
+  );
+  const clickAndRead = async (btn: Element) => {
+    const view = btn.ownerDocument.defaultView;
+    if (typeof btn.scrollIntoView === 'function')
+      btn.scrollIntoView({ block: 'center' });
+    if (view && btn instanceof view.HTMLElement)
+      btn.click();
+    await sleep(400);
+    return readOpenAgentsComposerId();
+  };
+
+  if (wantId) {
+    const row = Array.from(document.querySelectorAll('[data-sidebar-item-key]'))
+      .find(el => el.getAttribute('data-sidebar-item-key') === `row:${wantId}`);
+    const btn = row?.matches('.ui-sidebar-menu-button[aria-id="glass-sidebar-agent-row"]')
+      ? row
+      : row?.querySelector('.ui-sidebar-menu-button[aria-id="glass-sidebar-agent-row"]');
+    if (!btn)
+      return { ok: false, error: `Tab not found: ${title}` };
+    const landed = await clickAndRead(btn);
+    if (landed === wantId)
+      return { ok: true, landedComposerId: landed, tried: 1, via: 'agents' };
+    return {
+      ok: false,
+      error: `点了 ${title} 但落到别的 agent（want ${wantId} got ${landed || 'none'}）`,
+    };
+  }
+
+  const rows = Array.from(document.querySelectorAll('.ui-sidebar-menu-button[aria-id="glass-sidebar-agent-row"]'));
+  let hits = rows.filter(el => clean(el.querySelector('.ui-sidebar-menu-button-label')?.textContent) === title);
+  if (section) {
+    const scoped = hits.filter(el => sectionOf(el) === section);
+    if (scoped.length > 0)
+      hits = scoped;
+  }
+  if (hits.length === 0)
+    return { ok: false, error: `Tab not found: ${title}` };
+  const index = wantIdx >= 0 && wantIdx < hits.length ? wantIdx : 0;
+  const landed = await clickAndRead(hits[index]);
+  return { ok: true, landedComposerId: landed, tried: index + 1, via: 'agents' };
+}
+
+/**
+ * Page-side extract. It calls `readOpenAgentsComposerId` by name, so page
+ * callers pass `AGENTS_WINDOW_PAGE_DEPS`. Read-only; clicks nothing.
  */
 export function dumpAgentsWindow(): AgentsWindowDump {
   const clean = (s: string | null | undefined): string => (s || '').replace(/\s+/g, ' ').trim();
@@ -359,7 +465,8 @@ export function dumpAgentsWindow(): AgentsWindowDump {
   //       / Continue（.ui-tray-footer__primary > button，
   //         **empty `data-disabled` attribute** = still unanswered questions)
   // When the window is occluded / minimized Cursor does not render the transcript, so this is naturally null.
-  // The main-pane composer bar also gives "which agent is current": the questionnaire belongs to it; switching away on the web dismisses the card.
+  // The questionnaire belongs to the open session. Composer status still comes from a bar when one is mounted.
+  const openComposerId = readOpenAgentsComposerId();
   const bar = document.querySelector('div.composer-bar.editor[data-composer-id]');
   let questionnaire: Questionnaire | null = null;
   const qTray = document.querySelector('[class*="glass-questionnaire-tray"]');
@@ -405,7 +512,7 @@ export function dumpAgentsWindow(): AgentsWindowDump {
     const skipBtn = qTray.querySelector('.ui-tray-footer button[data-variant="ghost"]');
     const continueBtn = qTray.querySelector('.ui-tray-footer__primary > button');
     questionnaire = {
-      composerId: bar?.getAttribute('data-composer-id') || '',
+      composerId: openComposerId,
       questions,
       activeIndex: activeIdx,
       totalLabel: '',
@@ -438,7 +545,7 @@ export function dumpAgentsWindow(): AgentsWindowDump {
 
   return {
     sections,
-    activeComposerId: bar?.getAttribute('data-composer-id') || '',
+    activeComposerId: openComposerId,
     composerStatus: bar?.getAttribute('data-composer-status') || '',
     stopGenerating,
     inputAvailable: !!composerEl,

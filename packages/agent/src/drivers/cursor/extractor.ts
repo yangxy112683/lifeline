@@ -12,6 +12,7 @@ import { timingLog } from '../../timing-log.js';
 import { emptyCursorState } from '../../types.js';
 import {
   AGENTS_DUMP_TIMEOUT_MS,
+  AGENTS_WINDOW_PAGE_DEPS,
 
   dumpAgentsWindow,
   mapAgentsWindowDump,
@@ -1471,6 +1472,7 @@ export class DOMExtractor {
       dumpAgentsWindow as (...args: never[]) => unknown,
       [],
       AGENTS_DUMP_TIMEOUT_MS,
+      AGENTS_WINDOW_PAGE_DEPS,
     ) as AgentsWindowDump | null;
     if (!dump)
       return null;

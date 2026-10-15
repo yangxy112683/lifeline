@@ -29,6 +29,7 @@ import {
 import { mapCodeBuddyLive } from './drivers/codebuddy/live.js';
 import {
   AGENTS_DUMP_TIMEOUT_MS,
+  AGENTS_WINDOW_PAGE_DEPS,
 
   dumpAgentsWindow,
   mapAgentsWindowDump,
@@ -598,6 +599,7 @@ export class WindowMonitor extends EventEmitter {
         dumpAgentsWindow as (...args: never[]) => unknown,
         [],
         AGENTS_DUMP_TIMEOUT_MS,
+        AGENTS_WINDOW_PAGE_DEPS,
       ) as AgentsWindowDump | null;
       if (!dump) {
         console.warn(`[window-monitor] Agents poll "${win.title}": dump returned null`);

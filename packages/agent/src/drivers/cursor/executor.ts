@@ -1,8 +1,10 @@
 import type { CdpClient } from '../../cdp/client.js';
 import type { CommandResult, PlanModelOption, SelectorConfig, SwitchTabTarget } from '../../types.js';
 import type { WindowSessionTab } from '../../window-session.js';
+import { cdpCallExpression } from '../../cdp/client.js';
 import { timingLog, timingPreview } from '../../timing-log.js';
 import { pickWindowSession } from '../../window-session.js';
+import { readOpenAgentsComposerId, switchAgentsRowOnPage } from './agents-window.js';
 import { isPlaceholderComposerId, sameNameIdsFor } from './tab-identity.js';
 
 /** Switch result from in-page JS (landedComposerId = real id on the composer bar after the click). */
@@ -110,8 +112,6 @@ export const CURSOR_STOP_JS = `(() => {
   );
   return { ok: false, error: anySubmit ? 'Not generating' : 'Stop button not found' };
 })()`;
-/** Agents window rows (agent rows inside a section). */
-const AGENTS_ROW_SELECTOR = '.ui-sidebar-menu-button[aria-id="glass-sidebar-agent-row"]';
 
 /** Wrong-window / virtualized sidebar will not appear on the next try. */
 export function isRetryableCommandError(message: string): boolean {
@@ -1294,11 +1294,9 @@ export class CommandExecutor {
   }
 
   /**
-   * Switch agent in the Agents window: click the row by (section + title +
-   * same-title index), then re-read the composer bar to verify. Rows have no
-   * composerId of their own, so "re-read id === target id" is the only
-   * reliable land proof; drafts (placeholder id) have nothing to verify —
-   * a click is success.
+   * Switch agent in the Agents window. A real id selects
+   * `li[data-sidebar-item-key="row:<id>"]` and checks the active row.
+   * A draft has no id, so the title click is the whole proof.
    */
   private async switchAgentsRow(
     commandId: string,
@@ -1309,44 +1307,11 @@ export class CommandExecutor {
     const section = target?.section ?? '';
     const wantIdx = typeof target?.sameTitleIndex === 'number' ? target.sameTitleIndex : -1;
     const result = await this.withRetryValue(commandId, async (client) => {
-      const outcome = await client.evaluate(`
-        (async () => {
-          const clean = (s) => (s || '').replace(/\\s+/g, ' ').trim();
-          const title = clean(${JSON.stringify(tabTitle)});
-          const section = clean(${JSON.stringify(section)});
-          const wantIdx = ${JSON.stringify(wantIdx)};
-          const wantId = ${JSON.stringify(wantId)};
-          const rows = Array.from(document.querySelectorAll(${JSON.stringify(AGENTS_ROW_SELECTOR)}));
-          const sectionOf = (el) => clean(
-            el.closest('.ui-sidebar-section')?.querySelector('[data-section-head] .ui-sidebar-menu-button-label')?.textContent
-          );
-          let hits = rows.filter((el) => clean(el.querySelector('.ui-sidebar-menu-button-label')?.textContent) === title);
-          if (section) {
-            const scoped = hits.filter((el) => sectionOf(el) === section);
-            if (scoped.length > 0) hits = scoped;
-          }
-          if (hits.length === 0) return { ok: false, error: 'Tab not found: ' + title };
-          const composerIdOf = () =>
-            document.querySelector('div.composer-bar.editor[data-composer-id]')?.getAttribute('data-composer-id') || '';
-          const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-          const order = [];
-          if (wantIdx >= 0 && wantIdx < hits.length) order.push(wantIdx);
-          for (let i = 0; i < hits.length; i++) if (!order.includes(i)) order.push(i);
-          let landed = '';
-          for (const i of order) {
-            hits[i].scrollIntoView({ block: 'center' });
-            hits[i].click();
-            await sleep(400);
-            landed = composerIdOf();
-            if (!wantId) return { ok: true, landedComposerId: landed, tried: i + 1, via: 'agents' };
-            if (landed === wantId) return { ok: true, landedComposerId: landed, tried: i + 1, via: 'agents' };
-          }
-          return {
-            ok: false,
-            error: '点了 ' + title + ' 但落到别的 agent（want ' + wantId + ' got ' + (landed || 'none') + '）',
-          };
-        })()
-      `) as { ok: boolean; error?: string; landedComposerId?: string; tried?: number; via?: string } | null;
+      const outcome = await client.evaluate(cdpCallExpression(
+        switchAgentsRowOnPage as (...args: never[]) => unknown,
+        [{ title: tabTitle, section, wantIdx, wantId }],
+        [readOpenAgentsComposerId],
+      )) as { ok: boolean; error?: string; landedComposerId?: string; tried?: number; via?: string } | null;
       if (!outcome?.ok)
         throw new Error(outcome?.error ?? `Tab not found: ${tabTitle}`);
       return outcome;

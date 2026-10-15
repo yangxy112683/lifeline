@@ -43,7 +43,7 @@ describe('CommandExecutor.switchTab（agents 窗口）', () => {
     assert.match(expr, /glass-sidebar-agent-row/);
     assert.match(expr, /acme\/demo-repo/);
     assert.match(expr, /Design plan discussion/);
-    assert.match(expr, /"wantIdx": 1|wantIdx = 1/);
+    assert.match(expr, /"wantIdx":\s*1|wantIdx = 1/);
     assert.equal(expr.includes('agent-sidebar-cell'), false, '不该用项目窗口的侧栏选择器');
   });
 

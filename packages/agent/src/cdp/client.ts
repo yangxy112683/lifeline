@@ -5,6 +5,23 @@ import { timingLog } from '../timing-log.js';
 /** Match DOM extractor: 5s trips backoff; commands must outlast a slow evaluate. */
 const DEFAULT_TIMEOUT_MS = 12000;
 
+/**
+ * Page script for `CdpClient.callFunction`. `deps` are function declarations
+ * the serialized function calls by name. They have to be in this script.
+ * `fn.toString()` does not include them.
+ */
+export function cdpCallExpression(
+  fn: (...args: never[]) => unknown,
+  args: unknown[],
+  deps: ReadonlyArray<{ toString: () => string }> = [],
+): string {
+  const shim = 'var __name = function(fn, _n){ return fn; };';
+  const prelude = deps.map(dep => dep.toString()).join('\n');
+  const argStr = args.map(a => JSON.stringify(a)).join(', ');
+  const body = prelude ? `${prelude}\n` : '';
+  return `${shim}\n${body}(${fn.toString()})(${argStr})`;
+}
+
 interface CdpMessage {
   id?: number;
   method?: string;
@@ -150,6 +167,8 @@ export class CdpClient extends EventEmitter {
   /**
    * Serialize a function and its arguments, then evaluate in the page context.
    * The function must be self-contained (no closures over Node.js variables).
+   * Helpers it calls by name go in `deps` so their source is declared in the
+   * same script. `toString()` does not follow those calls.
    *
    * Injects a __name shim because tsx/esbuild wraps named functions with
    * __name() calls that don't exist in the target page context.
@@ -158,21 +177,16 @@ export class CdpClient extends EventEmitter {
     fn: (...args: never[]) => unknown,
     ...args: unknown[]
   ): Promise<unknown> {
-    const argStr = args.map(a => JSON.stringify(a)).join(', ');
-    const shim = 'var __name = function(fn, _n){ return fn; };';
-    const expression = `${shim}(${fn.toString()})(${argStr})`;
-    return this.evaluate(expression);
+    return this.evaluate(cdpCallExpression(fn, args));
   }
 
   async callFunctionWithTimeout(
     fn: (...args: never[]) => unknown,
     args: unknown[],
     timeoutMs: number,
+    deps: ReadonlyArray<{ toString: () => string }> = [],
   ): Promise<unknown> {
-    const argStr = args.map(a => JSON.stringify(a)).join(', ');
-    const shim = 'var __name = function(fn, _n){ return fn; };';
-    const expression = `${shim}(${fn.toString()})(${argStr})`;
-    return this.evaluate(expression, timeoutMs);
+    return this.evaluate(cdpCallExpression(fn, args, deps), timeoutMs);
   }
 
   /**
